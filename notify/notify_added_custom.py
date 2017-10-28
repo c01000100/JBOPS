@@ -1,23 +1,18 @@
 """
-Send an email with what was added to Plex in the past week using PlexPy.
-Email includes title (TV: Show Name: Episode Name; Movie: Movie Title), time added, image, and summary.
-
+Send an email with what was added to Plex in the past X days using PlexPy.
 Uses:
     notify_added_lastweek.py -t poster -d 1 -u all -i user1 user2 -s 250 100
         # email all users expect user1 & user2 what was added in the last day using posters that are 250x100
-
     notify_added_lastweek.py -t poster -d 7 -u all
         # email all users what was added in the last 7 days(week) using posters that are default sized
-
     notify_added_lastweek.py -t poster -d 7 -u all -s 1000 500
         # email all users what was added in the last 7 days(week) using posters that are 1000x500
-
     notify_added_lastweek.py -t art -d 7 -u user1
         # email user1 & self what was added in the last 7 days(week) using artwork that is default sized
-
     notify_added_lastweek.py -t art -d 7
         # email self what was added in the last 7 days(week) using artwork that is default sized
-
+    notify_added_lastweek.py -l "TV Shows" -ul usernames.txt
+        # email specific plex users what was added only in the TV Shows library in the last 1 day
 """
 
 import requests
@@ -38,18 +33,18 @@ import argparse
 ## EDIT THESE SETTINGS ##
 PLEXPY_APIKEY = 'xxx'  # Your PlexPy API key
 PLEXPY_URL = 'http://localhost:8181/'  # Your PlexPy URL
-LIBRARY_NAMES = ['Movies', 'TV Shows'] # Name of libraries you want to check.
 
 # Email settings
 name = '' # Your name
 sender = '' # From email address
-to = [sender] # Whoever you want to email [sender, 'name@example.com']
+# email to people without plex usernames that can access this server; must be valid email addresses
+to = [] # Whoever you want to email [sender, 'name@example.com']
 # Emails will be sent as BCC.
 email_server = 'smtp.gmail.com' # Email server (Gmail: smtp.gmail.com)
 email_port = 587  # Email port (Gmail: 587)
 email_username = '' # Your email username
 email_password = '' # Your email password
-email_subject = 'PlexPy Added Last {} day(s) Notification' #The email subject
+email_subject = 'New in {} on Plex - {} in {} day(s)' #The email subject
 
 # Default sizing for pictures
 # Poster
@@ -60,6 +55,7 @@ art_h = 100
 art_w = 205
 
 ## /EDIT THESE SETTINGS ##
+
 
 class METAINFO(object):
     def __init__(self, data=None):
@@ -73,6 +69,13 @@ class METAINFO(object):
         self.file_size = d['file_size']
         self.thumb = d['art']
         self.summary = d['summary']
+        self.media_index = d['media_index']
+        self.parent_media_index = d['parent_media_index']
+        self.studio = d['studio']
+        self.content_rating = d['content_rating']
+        self.date_release = d['originally_available_at']
+        self.duration = d['duration']
+        self.cast = d['actors']
 
 
 def get_get_recent(section_id, start, count):
@@ -114,7 +117,7 @@ def get_get_metadata(rating_key):
         sys.stderr.write("PlexPy API 'get_metadata' request failed: {0}.".format(e))
 
 
-def get_get_libraries_table():
+def get_get_libraries_table(libraries):
     # Get the data on the PlexPy libraries table.
     payload = {'apikey': PLEXPY_APIKEY,
                'cmd': 'get_libraries_table'}
@@ -123,7 +126,7 @@ def get_get_libraries_table():
         r = requests.get(PLEXPY_URL.rstrip('/') + '/api/v2', params=payload)
         response = r.json()
         res_data = response['response']['data']['data']
-        return [d['section_id'] for d in res_data if d['section_name'] in LIBRARY_NAMES]
+        return [d['section_id'] for d in res_data if d['section_name'] in libraries]
 
     except Exception as e:
         sys.stderr.write("PlexPy API 'get_libraries_table' request failed: {0}.".format(e))
@@ -175,6 +178,19 @@ def get_get_users():
         sys.stderr.write("PlexPy API 'get_user' request failed: {0}.".format(e))
 
 
+def get_user_id_list(filename):
+    if filename == '' or filename == 'self':
+        return []
+
+    try:
+        file_content = open(filename, 'r').read()
+        user_id_list = file_content.split('\n')
+        return user_id_list
+
+    except Exception as e:
+        sys.stderr.write("Read file failed: {0}.".format(e))
+
+
 def get_rating_keys(TODAY, LASTDATE):
 
     recent_lst = []
@@ -205,6 +221,8 @@ def build_html(rating_key, height, width, pic_type):
     meta = get_get_metadata(str(rating_key))
 
     added = time.ctime(float(meta.added_at))
+    ep_num = "s"+meta.parent_media_index.zfill(2)+"e"+meta.media_index.zfill(2)
+    round_duration = (int(meta.duration) / 60 / 1000)
     # Pull image url
     thumb_url = "{}.jpeg".format(get_pms_image_proxy(meta.thumb))
     if pic_type == 'poster':
@@ -213,27 +231,42 @@ def build_html(rating_key, height, width, pic_type):
     # Saving image in current path
     urllib.urlretrieve(thumb_url, image_name)
     image = dict(title=meta.rating_key, path=image_name, cid=str(uuid.uuid4()))
+
+    meta.cast = ", ".join(meta.cast)
+
     if meta.grandparent_title == '' or meta.media_type == 'movie':
         # Movies
-        notify = u"<dt>{x.title} ({x.rating_key}) was added {when}.</dt>" \
-                       u"</dt> <dd> <table> <tr> <th>" \
-                       '<img src="cid:{cid}" alt="{alt}" width="{width}" height="{height}"> </th>' \
-                       u" <th id=t11> {x.summary} </th> </tr> </table> </dd> <br>" \
-            .format(x=meta, when=added, alt=cgi.escape(meta.rating_key), quote=True, width=width, height=height,**image)
+        vid_title = meta.title
+        notify = u"<dt>" \
+                       u"</dt> <dd> <table> <tr> <td> <img src='cid:{cid}' alt='Movie {alt}' width='{width}'> </td>" \
+                       u" <td class='info'><h2>{x.title}</h2><br>" \
+                       u" <br>{x.summary}<br>" \
+                       u" <br>({rdur} min) released {x.date_release}<br>" \
+                       u" <br>[{x.content_rating}] from {x.studio}<br>" \
+                       u" <br>Starring: {x.cast}" \
+                       u" </td> </tr> </table> </dd> <br>" \
+            .format(x=meta, rdur=round_duration, when=added, alt=cgi.escape(meta.rating_key), quote=True, width=width,
+height=height,**image)
     else:
         # Shows
-        notify = u"<dt>{x.grandparent_title}: {x.title} ({x.rating_key}) was added {when}." \
-                       u"</dt> <dd> <table> <tr> <th>" \
-                       '<img src="cid:{cid}" alt="{alt}" width="{width}" height="{height}"> </th>' \
-                       u" <th id=t11> {x.summary} </th> </tr> </table> </dd> <br>" \
-            .format(x=meta, when=added, alt=cgi.escape(meta.rating_key), quote=True, width=width, height=height, **image)
+        vid_title = meta.grandparent_title
+        notify = u"<dt>" \
+                       u"</dt> <dd> <table> <tr> <td> <img src='cid:{cid}' alt='Episode {alt}' width='{width}'> </td>" \
+                       u" <td class='info'><h2>{x.grandparent_title}</h2><br>" \
+                       u" <h3>{ep} - {x.title}</h3><br>" \
+                       u" <br>{x.summary}<br>" \
+                       u" <br>({rdur} min) aired {x.date_release}<br>" \
+                       u" <br>[{x.content_rating}] from {x.studio}" \
+                       u" </td> </tr> </table> </dd> <br>" \
+            .format(x=meta, rdur=round_duration, ep=ep_num, when=added, alt=cgi.escape(meta.rating_key), quote=True,
+width=width, height=height, **image)
 
     image_text = MIMEText(u'[image: {title}]'.format(**image), 'plain', 'utf-8')
 
-    return image_text, image, notify
+    return image_text, image, notify, meta.media_type, added, vid_title, ep_num
 
 
-def send_email(msg_text_lst, notify_lst, image_lst, to, days):
+def send_email(msg_text_lst, notify_lst, image_lst, to, days, library):
     """
     Using info found here: http://stackoverflow.com/a/20485764/7286812
     to accomplish emailing inline images
@@ -242,23 +275,30 @@ def send_email(msg_text_lst, notify_lst, image_lst, to, days):
     <html>
       <head>
         <style>
-        th#t11 {{ padding: 6px; vertical-align: top; text-align: left; }}
+        h2, h3 {{ display:inline; }}
         </style>
       </head>
       <body>
-        <p>Hi!<br>
-        <br>Below is the list of content added to Plex's {LIBRARY_NAMES} this week.<br>
+        <p>Hello!<br>
+        <br>Below is the list of content added to Plex's <b>{library_names}</b> in the last {d} day(s).<br>
+        <ul>A few notes:
+        <li>Log in to <a href='https://app.plex.tv/desktop#' title='Plex Media Server'>Plex Media Server</a> to catch up on the movies or tv shows you may have missed</li>
+        <li>If you haven't logged in for a while, the email account you're reading this from matches your Plex login ID</li>
+        <li>If there's a show you'd like to see on this server, send me a note and I'll see if I can find it</li>
+        <li>The time covered in this report is a multiple of 24 hours times the number of days from the date and time that this report is generated (i.e. From current time yesterday to current time today)</li>
+        <li>You are seeing this message because you are subscribed to a Plex Media Server</li>
+        <li>If you would like to be removed from the server, just reply to this message indicating as such</li></ul>
         <dl>
         {notify_lst}
         </dl>
         </p>
       </body>
     </html>
-    """.format(notify_lst="\n".join(notify_lst).encode("utf-8"), LIBRARY_NAMES=" & ".join(LIBRARY_NAMES)
-               , quote=True, ), 'html', 'utf-8')
+    """.format(notify_lst="\n".join(notify_lst).encode("utf-8"), library_names=library
+               , d=days, quote=True, ), 'html', 'utf-8')
 
     message = MIMEMultipart('related')
-    message['Subject'] = email_subject.format(days)
+    message['Subject'] = email_subject.format(library, len(notify_lst), days)
     message['From'] = email.utils.formataddr((name, sender))
     message_alternative = MIMEMultipart('alternative')
     message.attach(message_alternative)
@@ -288,22 +328,26 @@ def send_email(msg_text_lst, notify_lst, image_lst, to, days):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description="Send an email with what was added to Plex in the past week using PlexPy.")
+    parser = argparse.ArgumentParser(description="Send an email with what was added to Plex in the past interval using PlexPy.")
     parser.add_argument('-t', '--type', help='Metadata picture type from Plex.',
-                        required= True, choices=['art', 'poster'])
+                        default='poster', choices=['art', 'poster'])
     parser.add_argument('-s', '--size', help='Metadata picture size from Plex {Height Width}.', nargs='*')
     parser.add_argument('-d', '--days', help='Time frame for which to check recently added to Plex.',
-                        required= True, type=int)
+                        default=1, type=int)
     parser.add_argument('-u', '--users', help='Which users from Plex will be emailed.',
                         nargs='+', default='self', type=str)
+    parser.add_argument('-ul', '--userslist', help='File containing list of which users from Plex will be emailed.(One username per line)',
+                        default='self', type=str)
     parser.add_argument('-i', '--ignore', help='Which users from Plex to ignore.',
                         nargs='+', default='None', type=str)
+    parser.add_argument('-l', '--library', help='Which library to scan for additions.(eg. "TV Shows")',
+                        default='Movies', type=str)
 
 
     opts = parser.parse_args()
 
-    TODAY = int(time.time())
-    LASTDATE = int(TODAY - opts.days * 24 * 60 * 60)
+    TODAY = int(time.time()) # Hours, minutes, and seconds etc. for current time
+    LASTDATE = int(TODAY - opts.days * 24 * 60 * 60) # Counting back in 24 hour periods from current time
 
     # Image sizing based on type or custom size
     if opts.type == 'poster' and not opts.size:
@@ -316,13 +360,23 @@ if __name__ == '__main__':
         height = art_h
         width = art_w
 
-    # Find the libraries from LIBRARY_NAMES
-    glt = [lib for lib in get_get_libraries_table()]
+    library = opts.library
+
+    # Find the library from arguments
+    glt = [lib for lib in get_get_libraries_table(library)]
 
     # Update media info for libraries.
     [update_library_media_info(i) for i in glt]
 
     # Gather all users email addresses
+    if opts.users != ['all']:
+        print('Users: {} && Userslist: {}').format(opts.users, opts.userslist)
+        if get_user_id_list(opts.userslist) != 'None':
+            for user in get_user_id_list(opts.userslist):
+                if user != '' and opts.users == 'self':
+                    opts.users = []
+                if user not in opts.users:
+                    opts.users.append(user)
     if opts.users == ['all']:
         [to.append(x['email']) for x in get_get_users() if x['email'] != '' and x['email'] not in to
          and x['username'] not in opts.ignore]
@@ -342,13 +396,14 @@ if __name__ == '__main__':
     notify_lst = []
 
     build_parts = [build_html(rating_key, height, width, opts.type) for rating_key in sorted(rating_keys_lst)]
-    for parts in build_parts:
+    build_parts_sorted = sorted(build_parts, key = lambda x: (x[3],x[5],x[6]))
+    for parts in build_parts_sorted:
         msg_text_lst.append(parts[0])
         image_lst.append(parts[1])
         notify_lst.append(parts[2])
 
     # Send email
-    send_email(msg_text_lst, notify_lst, image_lst, to, opts.days)
+    send_email(msg_text_lst, notify_lst, image_lst, to, opts.days, library)
 
     # Delete images in current path
     for img in image_lst:
