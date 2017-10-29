@@ -76,6 +76,7 @@ class METAINFO(object):
         self.date_release = d['originally_available_at']
         self.duration = d['duration']
         self.cast = d['actors']
+        self.genres = d['genres']
 
 
 def get_get_recent(section_id, start, count):
@@ -233,33 +234,43 @@ def build_html(rating_key, height, width, pic_type):
     image = dict(title=meta.rating_key, path=image_name, cid=str(uuid.uuid4()))
 
     meta.cast = ", ".join(meta.cast)
+    meta.genres = ", ".join(meta.genres)
+
+    # TROUBLESHOOTING BREAK INSERTION into Interactive mode #
+    # Un-comment following two lines at desired break-point
+    #import code
+    #code.interact(local=locals())
 
     if meta.grandparent_title == '' or meta.media_type == 'movie':
         # Movies
         vid_title = meta.title
         notify = u"<dt>" \
-                       u"</dt> <dd> <table> <tr> <td> <img src='cid:{cid}' alt='Movie {alt}' width='{width}'> </td>" \
-                       u" <td class='info'><h2>{x.title}</h2><br>" \
-                       u" <br>{x.summary}<br>" \
-                       u" <br>({rdur} min) released {x.date_release}<br>" \
-                       u" <br>[{x.content_rating}] from {x.studio}<br>" \
-                       u" <br>Starring: {x.cast}" \
+                       u"</dt> <dd> <table class='video'> <tr> <td class='thumb'>" \
+                       u" <img class='thumb' src='cid:{cid}' alt='Movie {alt}' width='{width}'> </td>" \
+                       u" <td class='info'><h2>{x.title}</h2> ({year})<br>" \
+                       u" <p class='upper'>{x.summary}<br>" \
+                       u" <br><span class='meta-dur'>({rdur} min)</span> <span class='meta meta-rat'>{x.content_rating}</span>" \
+                       u" <span class='meta meta-gen'> {x.genres}</span></p>" \
+                       u" <p class='lower'>Studio: {x.studio}<br>" \
+                       u" <br>Starring: {x.cast}</p>" \
                        u" </td> </tr> </table> </dd> <br>" \
-            .format(x=meta, rdur=round_duration, when=added, alt=cgi.escape(meta.rating_key), quote=True, width=width,
-height=height,**image)
+            .format(x=meta, year=meta.date_release[:4], rdur=round_duration, when=added, alt=cgi.escape(meta.rating_key), quote=True, 
+width=width, height=height,**image)
     else:
         # Shows
         vid_title = meta.grandparent_title
         notify = u"<dt>" \
-                       u"</dt> <dd> <table> <tr> <td> <img src='cid:{cid}' alt='Episode {alt}' width='{width}'> </td>" \
+                       u"</dt> <dd> <table class='video'> <tr> <td class='thumb'>" \
+                       u" <img class='thumb' src='cid:{cid}' alt='Episode {alt}' width='{width}'> </td>" \
                        u" <td class='info'><h2>{x.grandparent_title}</h2><br>" \
-                       u" <h3>{ep} - {x.title}</h3><br>" \
-                       u" <br>{x.summary}<br>" \
-                       u" <br>({rdur} min) aired {x.date_release}<br>" \
-                       u" <br>[{x.content_rating}] from {x.studio}" \
+                       u" <h3>{ep} - {x.title}</h3> ({x.date_release})<br>" \
+                       u" <p class='upper'>{x.summary}<br>" \
+                       u" <br><span class='meta-dur'>({rdur} min)</span> <span class='meta meta-rat'>{x.content_rating}</span>" \
+                       u" <span class='meta meta-gen'> {x.genres}</span></p>" \
+                       u" <p class='lower'>Studio: {x.studio}</p>" \
                        u" </td> </tr> </table> </dd> <br>" \
-            .format(x=meta, rdur=round_duration, ep=ep_num, when=added, alt=cgi.escape(meta.rating_key), quote=True,
-width=width, height=height, **image)
+            .format(x=meta, rdur=round_duration, ep=ep_num, when=added, alt=cgi.escape(meta.rating_key), quote=True, width=width, 
+height=height, **image)
 
     image_text = MIMEText(u'[image: {title}]'.format(**image), 'plain', 'utf-8')
 
@@ -275,22 +286,30 @@ def send_email(msg_text_lst, notify_lst, image_lst, to, days, library):
     <html>
       <head>
         <style>
-        h2, h3 {{ display:inline; }}
+            h2, h3 {{ display:inline; color:black; }}
+            table.video {{ background-color:#c0c0c0; padding:8px; border-radius:7px; width:800px; }}
+            td.thumb {{ vertical-align:top; }}
+            td.info {{ width:100%; padding-left:8px; }}
+            img.thumb {{ border:4px solid white; border-radius:3px; }}
+            p.upper {{ border-bottom: 1px solid white; padding-bottom:12px; }}
+            span.meta {{ margin-left:6px; }}
+            span.meta-rat {{ color:#656565; padding:3px; border:1px solid #656565; border-radius:2px; }}
+            span.meta-rel {{ color:#656565; }}
         </style>
       </head>
       <body>
-        <p>Hello!<br>
+        <p>Hi!<br>
         <br>Below is the list of content added to Plex's <b>{library_names}</b> in the last {d} day(s).<br>
+        <dl>
+        {notify_lst}
+        </dl>
         <ul>A few notes:
         <li>Log in to <a href='https://app.plex.tv/desktop#' title='Plex Media Server'>Plex Media Server</a> to catch up on the movies or tv shows you may have missed</li>
         <li>If you haven't logged in for a while, the email account you're reading this from matches your Plex login ID</li>
         <li>If there's a show you'd like to see on this server, send me a note and I'll see if I can find it</li>
         <li>The time covered in this report is a multiple of 24 hours times the number of days from the date and time that this report is generated (i.e. From current time yesterday to current time today)</li>
         <li>You are seeing this message because you are subscribed to a Plex Media Server</li>
-        <li>If you would like to be removed from the server, just reply to this message indicating as such</li></ul>
-        <dl>
-        {notify_lst}
-        </dl>
+        <li>If you would like to be removed from the server or have your report interval adjusted, just reply to this message indicating as such</li></ul>
         </p>
       </body>
     </html>
@@ -336,12 +355,12 @@ if __name__ == '__main__':
                         default=1, type=int)
     parser.add_argument('-u', '--users', help='Which users from Plex will be emailed.',
                         nargs='+', default='self', type=str)
-    parser.add_argument('-ul', '--userslist', help='File containing list of which users from Plex will be emailed.(One username per line)',
+    parser.add_argument('-ul', '--userslist', help='File containing list of which users from Plex will be emailed.',
                         default='self', type=str)
     parser.add_argument('-i', '--ignore', help='Which users from Plex to ignore.',
                         nargs='+', default='None', type=str)
-    parser.add_argument('-l', '--library', help='Which library to scan for additions.(eg. "TV Shows")',
-                        default='Movies', type=str)
+    parser.add_argument('-l', '--library', help='Which library to scan for additions.',
+                        default='TV Shows', type=str)
 
 
     opts = parser.parse_args()
